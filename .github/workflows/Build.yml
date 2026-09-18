@@ -1,0 +1,120 @@
+name: build 8188eu driver
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y \
+            git make gcc-aarch64-linux-gnu bc flex bison \
+            libssl-dev libelf-dev python3 python3-pip cpio rsync kmod
+
+      - name: Clone ACK kernel source (android12-5.10-lts)
+        run: |
+          set -eux
+          git clone --depth 1 \
+            -b android12-5.10-lts \
+            https://android.googlesource.com/kernel/common \
+            kernel_common
+          cd kernel_common
+          echo "=== HEAD commit ==="
+          git log --oneline -1
+          echo "=== Makefile version ==="
+          head -5 Makefile
+
+      - name: Prepare kernel headers
+        run: |
+          set -eux
+          cd kernel_common
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare
+          echo "=== Module.symvers check ==="
+          ls -la Module.symvers || echo "WARNING: Module.symvers not found"
+          wc -l Module.symvers 2>/dev/null || true
+
+      - name: Clone rtl8188eus driver
+        run: |
+          set -eux
+          git clone --depth 1 \
+            -b v5.7.6.1 \
+            https://github.com/aircrack-ng/rtl8188eus \
+            driver
+          cd driver
+          echo "=== driver HEAD ==="
+          git log --oneline -1
+
+      - name: Patch driver Makefile for ARM64
+        run: |
+          set -eux
+          cd driver
+          # disable default x86 platform
+          sed -i 's/^CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/' Makefile
+          # enable ARM64 platform
+          sed -i 's/^CONFIG_PLATFORM_ARM64 = n/CONFIG_PLATFORM_ARM64 = y/' Makefile
+          echo "=== platform config ==="
+          grep -n "CONFIG_PLATFORM" Makefile | head -30
+
+      - name: Build driver module
+        run: |
+          set -eux
+          cd driver
+          make \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            KSRC=$GITHUB_WORKSPACE/kernel_common \
+            KVER=5.10 \
+            modules 2>&1 | tee build.log
+
+      - name: Locate built .ko
+        run: |
+          set -eux
+          echo "=== all .ko files ==="
+          find driver -name "*.ko" -type f
+          mkdir -p out
+          find driver -name "8188eu.ko" -exec cp {} out/ \;
+          echo "=== out dir ==="
+          ls -la out/
+
+      - name: Show modinfo
+        run: |
+          set -eux
+          for f in out/*.ko; do
+            echo "=== $f ==="
+            modinfo "$f" || true
+          done
+
+      - name: Capture Module.symvers for reference
+        if: always()
+        run: |
+          set -eux
+          mkdir -p out/meta
+          if [ -f kernel_common/Module.symvers ]; then
+            cp kernel_common/Module.symvers out/meta/Module.symvers
+            echo "Module.symvers lines: $(wc -l < out/meta/Module.symvers)"
+          fi
+          if [ -f kernel_common/include/config/kernel.release ]; then
+            cp kernel_common/include/config/kernel.release out/meta/kernel.release
+            cat out/meta/kernel.release
+          fi
+          cd kernel_common && git log --oneline -1 > ../out/meta/kernel-commit.txt
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rtl8188eus-ko
+          path: |
+            out/**/*.ko
+            out/meta/**
+            driver/build.log
+          if-no-files-found: warn
