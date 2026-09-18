@@ -58,12 +58,19 @@ jobs:
         run: |
           set -eux
           cd driver
-          # disable default x86 platform
           sed -i 's/^CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/' Makefile
-          # enable ARM64 platform
           sed -i 's/^CONFIG_PLATFORM_ARM64 = n/CONFIG_PLATFORM_ARM64 = y/' Makefile
           echo "=== platform config ==="
           grep -n "CONFIG_PLATFORM" Makefile | head -30
+
+      - name: Debug Makefile modules target
+        run: |
+          set -eux
+          cd driver
+          echo "=== modules target ==="
+          grep -n -A10 "^modules:" Makefile || true
+          echo "=== KERNELDIR / KSRC refs ==="
+          grep -n "KERNELDIR\|KSRC\|KERNELRELEASE" Makefile | head -30
 
       - name: Build driver module
         run: |
@@ -72,7 +79,8 @@ jobs:
           make \
             ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- \
-            KERNELDIR=$GITHUB_WORKSPACE/kernel_common \
+            -C $GITHUB_WORKSPACE/kernel_common \
+            M=$PWD \
             KCFLAGS="-Wno-error=misleading-indentation -Wno-error" \
             modules 2>&1 | tee build.log
 
