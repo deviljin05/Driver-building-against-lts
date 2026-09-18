@@ -29,8 +29,6 @@ jobs:
           cd kernel_common
           echo "=== HEAD commit ==="
           git log --oneline -1
-          echo "=== Makefile version ==="
-          head -5 Makefile
 
       - name: Prepare kernel headers
         run: |
@@ -38,9 +36,6 @@ jobs:
           cd kernel_common
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare
-          echo "=== Module.symvers check ==="
-          ls -la Module.symvers || echo "WARNING: Module.symvers not found"
-          wc -l Module.symvers 2>/dev/null || true
           echo "=== kernel.release ==="
           cat include/config/kernel.release || true
 
@@ -58,58 +53,38 @@ jobs:
         run: |
           set -eux
           cd driver
+          # disable x86 platform
           sed -i 's/^CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/' Makefile
+          # enable ARM64 platform
           sed -i 's/^CONFIG_PLATFORM_ARM64 = n/CONFIG_PLATFORM_ARM64 = y/' Makefile
-          echo "=== platform config ==="
-          grep -n "CONFIG_PLATFORM" Makefile | head -30
+          # add endianness / arch defines if missing
+          grep -q "^CONFIG_LITTLE_ENDIAN" Makefile || echo "CONFIG_LITTLE_ENDIAN = y" >> Makefile
+          grep -q "^CONFIG_BIG_ENDIAN" Makefile || echo "CONFIG_BIG_ENDIAN = n" >> Makefile
+          grep -q "^CONFIG_ARM64" Makefile || echo "CONFIG_ARM64 = y" >> Makefile
+          echo "=== config ==="
+          grep -n "CONFIG_PLATFORM_ARM64\|CONFIG_LITTLE_ENDIAN\|CONFIG_BIG_ENDIAN\|CONFIG_ARM64" Makefile | head -20
 
-      - name: Inspect driver Makefile
+      - name: Check ARM64 section in Makefile
         run: |
           set -eux
           cd driver
-          echo "=== modules target ==="
-          grep -n -A15 "^modules:" Makefile || true
-          echo "=== all/default targets ==="
-          grep -n "^all:\|^default:" Makefile || true
-          echo "=== KERNELDIR / KSRC refs ==="
-          grep -n "KERNELDIR\|KSRC\|KERNELRELEASE" Makefile | head -30
-          echo "=== main .ko target ==="
-          grep -n "8188eu.ko\|\.ko:" Makefile | head -20
+          echo "=== ARM64 platform block ==="
+          grep -n -A30 "CONFIG_PLATFORM_ARM64" Makefile | head -60 || true
 
-      - name: Build driver module (two-pass)
+      - name: Build driver module
         run: |
           set -eux
           cd driver
-          echo "=== PASS 1: generate Module.symvers ==="
-          make \
-            ARCH=arm64 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            -C $GITHUB_WORKSPACE/kernel_common \
-            M=$PWD \
-            KCFLAGS="-Wno-error=misleading-indentation -Wno-error" \
-            modules 2>&1 | tee build.log || true
-
-          echo "=== PASS 2: force module compile ==="
+          echo "=== building 8188eu.ko ==="
           make \
             ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- \
             -C $GITHUB_WORKSPACE/kernel_common \
             M=$PWD \
             KERNELRELEASE=5.10.0 \
-            KCFLAGS="-Wno-error=misleading-indentation -Wno-error" \
-            modules 2>&1 | tee -a build.log || true
-
-          echo "=== PASS 3: direct .ko target ==="
-          make \
-            ARCH=arm64 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            -C $GITHUB_WORKSPACE/kernel_common \
-            M=$PWD \
-            KERNELRELEASE=5.10.0 \
-            KCFLAGS="-Wno-error=misleading-indentation -Wno-error" \
+            KCFLAGS="-Wno-error=misleading-indentation -Wno-error -DCONFIG_LITTLE_ENDIAN -DCONFIG_ARM64 -DCONFIG_IOCTL_CFG80211 -DRTW_USE_CFG80211_STA_EVENT" \
             CONFIG_RTL8188EU=m \
-            8188eu.ko 2>&1 | tee -a build.log || true
-
+            8188eu.ko 2>&1 | tee build.log || true
           echo "=== find all .ko files ==="
           find . -name "*.ko" -type f
           ls -la *.ko 2>/dev/null || echo "no .ko in root"
@@ -120,14 +95,7 @@ jobs:
           echo "=== all .ko files anywhere ==="
           find driver -name "*.ko" -type f
           mkdir -p out
-          find driver -name "8188eu.ko" -exec cp {} out/ \;
-          if [ -z "$(ls -A out 2>/dev/null)" ]; then
-            echo "8188eu.ko not found, copying all .ko"
-            find driver -name "*.ko" -exec cp {} out/ \;
-          fi
-          if [ -z "$(ls -A out 2>/dev/null)" ]; then
-            echo "NO .ko files found at all"
-          fi
+          find driver -name "*.ko" -exec cp {} out/ \;
           echo "=== out dir ==="
           ls -la out/
 
@@ -139,14 +107,13 @@ jobs:
             modinfo "$f" || true
           done
 
-      - name: Capture Module.symvers and metadata
+      - name: Capture metadata
         if: always()
         run: |
           set -eux
           mkdir -p out/meta
           if [ -f kernel_common/Module.symvers ]; then
-            cp kernel_common/Module.symvers out/meta/Module.symvers
-            echo "Module.symvers lines: $(wc -l < out/meta/Module.symvers)"
+            cp kernel_common/Module.symvers out/meta/Module.symvers || true
           fi
           if [ -f kernel_common/include/config/kernel.release ]; then
             cp kernel_common/include/config/kernel.release out/meta/kernel.release
