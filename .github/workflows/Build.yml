@@ -63,37 +63,70 @@ jobs:
           echo "=== platform config ==="
           grep -n "CONFIG_PLATFORM" Makefile | head -30
 
-      - name: Debug Makefile modules target
+      - name: Inspect driver Makefile
         run: |
           set -eux
           cd driver
           echo "=== modules target ==="
-          grep -n -A10 "^modules:" Makefile || true
+          grep -n -A15 "^modules:" Makefile || true
+          echo "=== all/default targets ==="
+          grep -n "^all:\|^default:" Makefile || true
           echo "=== KERNELDIR / KSRC refs ==="
           grep -n "KERNELDIR\|KSRC\|KERNELRELEASE" Makefile | head -30
+          echo "=== main .ko target ==="
+          grep -n "8188eu.ko\|\.ko:" Makefile | head -20
 
-      - name: Build driver module
+      - name: Build driver module (two-pass)
         run: |
           set -eux
           cd driver
+          echo "=== PASS 1: generate Module.symvers ==="
           make \
             ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- \
             -C $GITHUB_WORKSPACE/kernel_common \
             M=$PWD \
             KCFLAGS="-Wno-error=misleading-indentation -Wno-error" \
-            modules 2>&1 | tee build.log
+            modules 2>&1 | tee build.log || true
+
+          echo "=== PASS 2: force module compile ==="
+          make \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            -C $GITHUB_WORKSPACE/kernel_common \
+            M=$PWD \
+            KERNELRELEASE=5.10.0 \
+            KCFLAGS="-Wno-error=misleading-indentation -Wno-error" \
+            modules 2>&1 | tee -a build.log || true
+
+          echo "=== PASS 3: direct .ko target ==="
+          make \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            -C $GITHUB_WORKSPACE/kernel_common \
+            M=$PWD \
+            KERNELRELEASE=5.10.0 \
+            KCFLAGS="-Wno-error=misleading-indentation -Wno-error" \
+            CONFIG_RTL8188EU=m \
+            8188eu.ko 2>&1 | tee -a build.log || true
+
+          echo "=== find all .ko files ==="
+          find . -name "*.ko" -type f
+          ls -la *.ko 2>/dev/null || echo "no .ko in root"
 
       - name: Locate built .ko
         run: |
           set -eux
-          echo "=== all .ko files ==="
+          echo "=== all .ko files anywhere ==="
           find driver -name "*.ko" -type f
           mkdir -p out
           find driver -name "8188eu.ko" -exec cp {} out/ \;
           if [ -z "$(ls -A out 2>/dev/null)" ]; then
             echo "8188eu.ko not found, copying all .ko"
             find driver -name "*.ko" -exec cp {} out/ \;
+          fi
+          if [ -z "$(ls -A out 2>/dev/null)" ]; then
+            echo "NO .ko files found at all"
           fi
           echo "=== out dir ==="
           ls -la out/
@@ -106,7 +139,7 @@ jobs:
             modinfo "$f" || true
           done
 
-      - name: Capture Module.symvers for reference
+      - name: Capture Module.symvers and metadata
         if: always()
         run: |
           set -eux
