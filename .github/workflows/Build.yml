@@ -41,13 +41,14 @@ jobs:
           echo "=== Module.symvers check ==="
           ls -la Module.symvers || echo "WARNING: Module.symvers not found"
           wc -l Module.symvers 2>/dev/null || true
+          echo "=== kernel.release ==="
+          cat include/config/kernel.release || true
 
-      - name: Clone rtl8188eus driver
+      - name: Clone rtl8188eus driver (d3vilh fork)
         run: |
           set -eux
           git clone --depth 1 \
-            -b v5.7.6.1 \
-            https://github.com/aircrack-ng/rtl8188eus \
+            https://github.com/d3vilh/rtl8188eus \
             driver
           cd driver
           echo "=== driver HEAD ==="
@@ -71,8 +72,8 @@ jobs:
           make \
             ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- \
-            KSRC=$GITHUB_WORKSPACE/kernel_common \
-            KVER=5.10 \
+            KERNELDIR=$GITHUB_WORKSPACE/kernel_common \
+            KCFLAGS="-Wno-error=misleading-indentation -Wno-error" \
             modules 2>&1 | tee build.log
 
       - name: Locate built .ko
@@ -82,6 +83,10 @@ jobs:
           find driver -name "*.ko" -type f
           mkdir -p out
           find driver -name "8188eu.ko" -exec cp {} out/ \;
+          if [ -z "$(ls -A out 2>/dev/null)" ]; then
+            echo "8188eu.ko not found, copying all .ko"
+            find driver -name "*.ko" -exec cp {} out/ \;
+          fi
           echo "=== out dir ==="
           ls -la out/
 
