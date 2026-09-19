@@ -120,12 +120,22 @@ jobs:
             modinfo "$f" || true
           done
 
-      - name: Upload artifacts
+      - name: Collect artifacts
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: 8188eu-ko
-          path: |
-            out/**/*
-            driver/build.log
-          if-no-files-found: warn
+        run: |
+          mkdir -p out out/meta
+          if [ -d driver ]; then
+            find driver -name "*.ko" -exec cp {} out/ \; || true
+          fi
+          if [ -f kernel_common/Module.symvers ]; then
+            cp kernel_common/Module.symvers out/meta/ || true
+          fi
+          if [ -f kernel_common/include/config/kernel.release ]; then
+            cp kernel_common/include/config/kernel.release out/meta/ || true
+          fi
+          if [ -d kernel_common ]; then
+            cd kernel_common && git log --oneline -1 > ../out/meta/kernel-commit.txt || true
+          fi
+          echo "=== out tree ==="
+          find out -type f || true
+          ls -la out/ || true
