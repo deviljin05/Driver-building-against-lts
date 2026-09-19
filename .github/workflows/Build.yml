@@ -6,7 +6,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 60
+    timeout-minutes: 120
 
     steps:
       - name: Checkout repo
@@ -32,16 +32,45 @@ jobs:
           git log --oneline -1
           head -5 Makefile
 
-      - name: Prepare kernel headers + Module.symvers
+      - name: Configure kernel (gki_defconfig)
         run: |
           set -eux
           cd kernel_common
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
+          cat >> arch/arm64/configs/gki_defconfig << 'EOF'
+          CONFIG_RTL8188EU=m
+          CONFIG_RTL8XXXU=m
+          CONFIG_RTL8XXXU_UNTESTED=y
+          CONFIG_WLAN_VENDOR_REALTEK=y
+          CONFIG_CFG80211=m
+          CONFIG_MAC80211=m
+          CONFIG_MAC80211_LEDS=y
+          CONFIG_CRYPTO_ARC4=m
+          CONFIG_CRYPTO_MICHAEL_MIC=m
+          CONFIG_CRC_CCITT=m
+          CONFIG_CRC_ITU_T=m
+          EOF
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+
+      - name: Build kernel (vmlinux + modules → Module.symvers)
+        run: |
+          set -eux
+          cd kernel_common
+          # modules_prepare headers ready karta hai
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare
-          echo "=== building vmlinux for Module.symvers ==="
+          # vmlinux build — kernel image
+          echo "=== building vmlinux ==="
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc) vmlinux
+          echo "=== vmlinux done ==="
+          ls -la vmlinux 2>/dev/null || echo "vmlinux not in root, checking arch path"
+          find . -maxdepth 3 -name "vmlinux" -type f 2>/dev/null | head
+          # modules build — Module.symvers generate karta hai
+          echo "=== building modules (generates Module.symvers) ==="
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc) modules
+          echo "=== Module.symvers check ==="
           ls -la Module.symvers
           wc -l Module.symvers
+          echo "=== kernel.release ==="
           cat include/config/kernel.release
 
       - name: Clone rtl8188eus driver
@@ -49,9 +78,10 @@ jobs:
           set -eux
           git clone --depth 1 https://github.com/d3vilh/rtl8188eus driver
           cd driver
+          echo "=== driver HEAD ==="
           git log --oneline -1
 
-      - name: Build 8188eu.ko
+      - name: Build 8188eu.ko against kernel Module.symvers
         run: |
           set -eux
           cd driver
@@ -66,17 +96,29 @@ jobs:
             modules 2>&1 | tee build.log || true
           echo "=== find .ko ==="
           find . -name "*.ko" -type f
+          ls -la *.ko 2>/dev/null || echo "no .ko in root"
 
       - name: Collect artifacts
+        if: always()
         run: |
           set -eux
           mkdir -p out out/meta
-          find driver -name "*.ko" -exec cp {} out/ \;
+          find driver -name "*.ko" -exec cp {} out/ \; || true
           cp kernel_common/Module.symvers out/meta/ 2>/dev/null || true
           cp kernel_common/include/config/kernel.release out/meta/ 2>/dev/null || true
           cd kernel_common && git log --oneline -1 > ../out/meta/kernel-commit.txt
-          echo "=== out ==="
+          echo "=== out tree ==="
+          find out -type f
           ls -la out/
+
+      - name: Show modinfo
+        if: always()
+        run: |
+          set -eux
+          for f in out/*.ko; do
+            echo "=== $f ==="
+            modinfo "$f" || true
+          done
 
       - name: Upload artifacts
         if: always()
