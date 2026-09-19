@@ -56,15 +56,12 @@ jobs:
         run: |
           set -eux
           cd kernel_common
-          # modules_prepare headers ready karta hai
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare
-          # vmlinux build — kernel image
           echo "=== building vmlinux ==="
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc) vmlinux
           echo "=== vmlinux done ==="
-          ls -la vmlinux 2>/dev/null || echo "vmlinux not in root, checking arch path"
+          ls -la vmlinux 2>/dev/null || echo "vmlinux not in root"
           find . -maxdepth 3 -name "vmlinux" -type f 2>/dev/null | head
-          # modules build — Module.symvers generate karta hai
           echo "=== building modules (generates Module.symvers) ==="
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc) modules
           echo "=== Module.symvers check ==="
@@ -82,6 +79,7 @@ jobs:
           git log --oneline -1
 
       - name: Build 8188eu.ko against kernel Module.symvers
+        if: always()
         run: |
           set -eux
           cd driver
@@ -95,30 +93,8 @@ jobs:
             CONFIG_RTL8188EU=m \
             modules 2>&1 | tee build.log || true
           echo "=== find .ko ==="
-          find . -name "*.ko" -type f
+          find . -name "*.ko" -type f || true
           ls -la *.ko 2>/dev/null || echo "no .ko in root"
-
-      - name: Collect artifacts
-        if: always()
-        run: |
-          set -eux
-          mkdir -p out out/meta
-          find driver -name "*.ko" -exec cp {} out/ \; || true
-          cp kernel_common/Module.symvers out/meta/ 2>/dev/null || true
-          cp kernel_common/include/config/kernel.release out/meta/ 2>/dev/null || true
-          cd kernel_common && git log --oneline -1 > ../out/meta/kernel-commit.txt
-          echo "=== out tree ==="
-          find out -type f
-          ls -la out/
-
-      - name: Show modinfo
-        if: always()
-        run: |
-          set -eux
-          for f in out/*.ko; do
-            echo "=== $f ==="
-            modinfo "$f" || true
-          done
 
       - name: Collect artifacts
         if: always()
@@ -139,3 +115,21 @@ jobs:
           echo "=== out tree ==="
           find out -type f || true
           ls -la out/ || true
+
+      - name: Show modinfo
+        if: always()
+        run: |
+          for f in out/*.ko; do
+            echo "=== $f ==="
+            modinfo "$f" || true
+          done
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: 8188eu-ko
+          path: |
+            out/**/*
+            driver/build.log
+          if-no-files-found: warn
