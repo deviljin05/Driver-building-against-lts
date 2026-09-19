@@ -61,7 +61,6 @@ jobs:
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc) vmlinux
           echo "=== vmlinux done ==="
           ls -la vmlinux 2>/dev/null || echo "vmlinux not in root"
-          find . -maxdepth 3 -name "vmlinux" -type f 2>/dev/null | head
           echo "=== building modules (generates Module.symvers) ==="
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc) modules
           echo "=== Module.symvers check ==="
@@ -88,7 +87,6 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu- \
             -C $GITHUB_WORKSPACE/kernel_common \
             M=$PWD \
-            KBUILD_EXTRA_SYMBOLS=$GITHUB_WORKSPACE/kernel_common/Module.symvers \
             KCFLAGS="-Wno-error=misleading-indentation -Wno-error -DCONFIG_LITTLE_ENDIAN -DCONFIG_ARM64" \
             CONFIG_RTL8188EU=m \
             modules 2>&1 | tee build.log || true
