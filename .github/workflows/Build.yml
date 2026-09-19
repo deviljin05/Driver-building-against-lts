@@ -1,11 +1,12 @@
-name: build 8188eu driver
+name: Build 8188eu driver only
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repo
@@ -29,105 +30,60 @@ jobs:
           cd kernel_common
           echo "=== HEAD commit ==="
           git log --oneline -1
+          head -5 Makefile
 
-      - name: Prepare kernel headers
+      - name: Prepare kernel headers + Module.symvers
         run: |
           set -eux
           cd kernel_common
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare
-          echo "=== kernel.release ==="
-          cat include/config/kernel.release || true
+          echo "=== building vmlinux for Module.symvers ==="
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc) vmlinux
+          ls -la Module.symvers
+          wc -l Module.symvers
+          cat include/config/kernel.release
 
-      - name: Clone rtl8188eus driver (d3vilh fork)
+      - name: Clone rtl8188eus driver
         run: |
           set -eux
-          git clone --depth 1 \
-            https://github.com/d3vilh/rtl8188eus \
-            driver
+          git clone --depth 1 https://github.com/d3vilh/rtl8188eus driver
           cd driver
-          echo "=== driver HEAD ==="
           git log --oneline -1
 
-      - name: Patch driver Makefile for ARM64
+      - name: Build 8188eu.ko
         run: |
           set -eux
           cd driver
-          # disable x86 platform
-          sed -i 's/^CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/' Makefile
-          # enable ARM64 platform
-          sed -i 's/^CONFIG_PLATFORM_ARM64 = n/CONFIG_PLATFORM_ARM64 = y/' Makefile
-          # add endianness / arch defines if missing
-          grep -q "^CONFIG_LITTLE_ENDIAN" Makefile || echo "CONFIG_LITTLE_ENDIAN = y" >> Makefile
-          grep -q "^CONFIG_BIG_ENDIAN" Makefile || echo "CONFIG_BIG_ENDIAN = n" >> Makefile
-          grep -q "^CONFIG_ARM64" Makefile || echo "CONFIG_ARM64 = y" >> Makefile
-          echo "=== config ==="
-          grep -n "CONFIG_PLATFORM_ARM64\|CONFIG_LITTLE_ENDIAN\|CONFIG_BIG_ENDIAN\|CONFIG_ARM64" Makefile | head -20
-
-      - name: Check ARM64 section in Makefile
-        run: |
-          set -eux
-          cd driver
-          echo "=== ARM64 platform block ==="
-          grep -n -A30 "CONFIG_PLATFORM_ARM64" Makefile | head -60 || true
-
-      - name: Build driver module
-        run: |
-          set -eux
-          cd driver
-          echo "=== building 8188eu.ko ==="
           make \
             ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- \
             -C $GITHUB_WORKSPACE/kernel_common \
             M=$PWD \
-            KERNELRELEASE=5.10.0 \
-            KCFLAGS="-Wno-error=misleading-indentation -Wno-error -DCONFIG_LITTLE_ENDIAN -DCONFIG_ARM64 -DCONFIG_IOCTL_CFG80211 -DRTW_USE_CFG80211_STA_EVENT" \
+            KBUILD_EXTRA_SYMBOLS=$GITHUB_WORKSPACE/kernel_common/Module.symvers \
+            KCFLAGS="-Wno-error=misleading-indentation -Wno-error -DCONFIG_LITTLE_ENDIAN -DCONFIG_ARM64" \
             CONFIG_RTL8188EU=m \
-            8188eu.ko 2>&1 | tee build.log || true
-          echo "=== find all .ko files ==="
+            modules 2>&1 | tee build.log || true
+          echo "=== find .ko ==="
           find . -name "*.ko" -type f
-          ls -la *.ko 2>/dev/null || echo "no .ko in root"
 
-      - name: Locate built .ko
+      - name: Collect artifacts
         run: |
           set -eux
-          echo "=== all .ko files anywhere ==="
-          find driver -name "*.ko" -type f
-          mkdir -p out
+          mkdir -p out out/meta
           find driver -name "*.ko" -exec cp {} out/ \;
-          echo "=== out dir ==="
+          cp kernel_common/Module.symvers out/meta/ 2>/dev/null || true
+          cp kernel_common/include/config/kernel.release out/meta/ 2>/dev/null || true
+          cd kernel_common && git log --oneline -1 > ../out/meta/kernel-commit.txt
+          echo "=== out ==="
           ls -la out/
 
-      - name: Show modinfo
-        run: |
-          set -eux
-          for f in out/*.ko; do
-            echo "=== $f ==="
-            modinfo "$f" || true
-          done
-
-      - name: Capture metadata
-        if: always()
-        run: |
-          set -eux
-          mkdir -p out/meta
-          if [ -f kernel_common/Module.symvers ]; then
-            cp kernel_common/Module.symvers out/meta/Module.symvers || true
-          fi
-          if [ -f kernel_common/include/config/kernel.release ]; then
-            cp kernel_common/include/config/kernel.release out/meta/kernel.release
-            cat out/meta/kernel.release
-          fi
-          cd kernel_common && git log --oneline -1 > ../out/meta/kernel-commit.txt
-
-      - name: Upload artifact
+      - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rtl8188eus-ko
+          name: 8188eu-ko
           path: |
-            out/**/*.ko
-            out/meta/**
+            out/**/*
             driver/build.log
           if-no-files-found: warn
